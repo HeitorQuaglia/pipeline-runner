@@ -12,11 +12,6 @@ type Engine struct {
 	logger *logrus.Logger
 }
 
-type JobExecutor interface {
-	ExecuteJob(ctx context.Context, job *Job, workflowVariables map[string]string) error
-	InitializeVolumes(volumes map[string]VolumeSpec) error
-}
-
 func NewEngine() *Engine {
 	return &Engine{
 		logger: logrus.New(),
@@ -25,6 +20,7 @@ func NewEngine() *Engine {
 
 func (e *Engine) ExecuteWorkflow(ctx context.Context, workflow *Workflow, executor JobExecutor) error {
 	e.logger.Infof("Starting workflow execution: %s", workflow.Name)
+	e.logger.Debugf("Workflow has %d jobs and %d volumes", len(workflow.Jobs), len(workflow.Volumes))
 
 	workflow.Status = WorkflowStatusRunning
 	now := time.Now()
@@ -38,20 +34,24 @@ func (e *Engine) ExecuteWorkflow(ctx context.Context, workflow *Workflow, execut
 		return fmt.Errorf("failed to initialize volumes: %w", err)
 	}
 
-	for i := range workflow.Jobs {
-		job := &workflow.Jobs[i]
+	scheduler := NewDependencyScheduler(workflow.Jobs, e.logger)
+	e.logger.Debugf("Created dependency scheduler for %d jobs", len(workflow.Jobs))
 
-		e.logger.Infof("Executing job: %s", job.Name)
+	if err := scheduler.ValidateDependencies(); err != nil {
+		e.logger.Errorf("Dependency validation failed: %v", err)
+		workflow.Status = WorkflowStatusFailed
+		finishedAt := time.Now()
+		workflow.FinishedAt = &finishedAt
+		return fmt.Errorf("dependency validation failed: %w", err)
+	}
+	e.logger.Debugf("Dependency validation passed")
 
-		if err := executor.ExecuteJob(ctx, job, workflow.Variables); err != nil {
-			e.logger.Errorf("Job %s failed: %v", job.Name, err)
-			workflow.Status = WorkflowStatusFailed
-			finishedAt := time.Now()
-			workflow.FinishedAt = &finishedAt
-			return fmt.Errorf("job %s failed: %w", job.Name, err)
-		}
-
-		e.logger.Infof("Job %s completed successfully", job.Name)
+	if err := e.executeJobsWithDependencies(ctx, scheduler, executor, workflow.Variables); err != nil {
+		e.logger.Errorf("Workflow execution failed: %v", err)
+		workflow.Status = WorkflowStatusFailed
+		finishedAt := time.Now()
+		workflow.FinishedAt = &finishedAt
+		return err
 	}
 
 	workflow.Status = WorkflowStatusCompleted
@@ -61,6 +61,7 @@ func (e *Engine) ExecuteWorkflow(ctx context.Context, workflow *Workflow, execut
 	e.logger.Infof("Workflow completed successfully: %s", workflow.Name)
 	return nil
 }
+
 
 func (e *Engine) ValidateWorkflow(workflow *Workflow) error {
 	if workflow.Name == "" {
@@ -75,6 +76,11 @@ func (e *Engine) ValidateWorkflow(workflow *Workflow) error {
 		if err := e.validateJob(&job); err != nil {
 			return fmt.Errorf("job %s validation failed: %w", job.Name, err)
 		}
+	}
+
+	scheduler := NewDependencyScheduler(workflow.Jobs, e.logger)
+	if err := scheduler.ValidateDependencies(); err != nil {
+		return fmt.Errorf("dependency validation failed: %w", err)
 	}
 
 	return nil

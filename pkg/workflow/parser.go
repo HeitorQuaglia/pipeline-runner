@@ -20,6 +20,7 @@ type SimpleStepSpec struct {
 	Image      string                `yaml:"image"`
 	Command    []string              `yaml:"command,omitempty"`
 	Containers []SimpleContainerSpec `yaml:"containers,omitempty"`
+	DependsOn  []string              `yaml:"depends_on,omitempty"`
 	Env        map[string]string     `yaml:"env,omitempty"`
 	Variables  map[string]string     `yaml:"variables,omitempty"`
 	WorkDir    string                `yaml:"workdir,omitempty"`
@@ -93,6 +94,7 @@ func ConvertToWorkflow(spec *SimpleWorkflowSpec) *Workflow {
 			ID:          fmt.Sprintf("job-%d", jobIndex),
 			Name:        stepName,
 			Description: stepSpec.Summary,
+			DependsOn:   stepSpec.DependsOn,
 			Commands:    make([]Command, 1),
 			Status:      JobStatusPending,
 		}
