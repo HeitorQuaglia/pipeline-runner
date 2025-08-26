@@ -79,18 +79,15 @@ func (e *ContainerExecutor) executeCommand(ctx context.Context, job *workflow.Jo
 	}
 
 	containerConfig := &container.Config{
-		Image: image,
-		Env:   e.buildEnvVars(job),
+		Image:   image,
+		Env:     e.buildEnvVars(job),
+		Cmd:     job.Container.Command,
 	}
 
 	if job.Container.WorkingDir != "" {
 		containerConfig.WorkingDir = job.Container.WorkingDir
 	} else if job.WorkingDir != "" {
 		containerConfig.WorkingDir = job.WorkingDir
-	}
-
-	if cmd.Script != "" && cmd.Script != "[]" {
-		containerConfig.Cmd = []string{"sh", "-c", cmd.Script}
 	}
 
 	resp, err := e.client.ContainerCreate(ctx, containerConfig, nil, nil, nil, "")

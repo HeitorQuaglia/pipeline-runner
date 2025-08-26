@@ -2,7 +2,7 @@ package workflow
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 
 	"gopkg.in/yaml.v3"
 )
@@ -22,7 +22,7 @@ type SimpleStepSpec struct {
 }
 
 func ParseSimpleWorkflow(filename string) (*SimpleWorkflowSpec, error) {
-	data, err := ioutil.ReadFile(filename)
+	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", filename, err)
 	}
@@ -54,25 +54,18 @@ func ConvertToWorkflow(spec *SimpleWorkflowSpec) *Workflow {
 			ID:          fmt.Sprintf("job-%d", jobIndex),
 			Name:        stepName,
 			Description: stepSpec.Summary,
-			Commands:    make([]Command, 1),
+			Commands:    make([]Command, 1), // Dummy command for validation
 			Container: &ContainerSpec{
-				Image: stepSpec.Image,
+				Image:   stepSpec.Image,
+				Command: stepSpec.Command, // Correctly assign command
 			},
 			Status: JobStatusPending,
 		}
 
-		if len(stepSpec.Command) > 0 {
-			job.Commands[0] = Command{
-				ID:     fmt.Sprintf("cmd-%d-0", jobIndex),
-				Script: fmt.Sprintf("%v", stepSpec.Command),
-				Status: CommandStatusPending,
-			}
-		} else {
-			job.Commands[0] = Command{
-				ID:     fmt.Sprintf("cmd-%d-0", jobIndex),
-				Script: "",
-				Status: CommandStatusPending,
-			}
+		// Add a dummy command to pass validation in engine
+		job.Commands[0] = Command{
+			ID:     fmt.Sprintf("cmd-%d-0", jobIndex),
+			Status: CommandStatusPending,
 		}
 
 		if stepSpec.Env != nil {
