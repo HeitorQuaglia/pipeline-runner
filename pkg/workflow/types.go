@@ -93,6 +93,7 @@ type Job struct {
 	WorkingDir   string            `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
 	
 	Container    *ContainerSpec    `json:"container,omitempty" yaml:"container,omitempty"`
+	Containers   []ContainerSpec   `json:"containers,omitempty" yaml:"containers,omitempty"`
 	Resources    *ResourceSpec     `json:"resources,omitempty" yaml:"resources,omitempty"`
 	
 	Timeout      *time.Duration    `json:"timeout,omitempty" yaml:"timeout,omitempty"`
@@ -147,6 +148,7 @@ type Rule struct {
 }
 
 type ContainerSpec struct {
+	Name        string            `json:"name,omitempty" yaml:"name,omitempty"`
 	Image       string            `json:"image" yaml:"image"`
 	Tag         string            `json:"tag,omitempty" yaml:"tag,omitempty"`
 	

@@ -24,16 +24,16 @@ func NewEngine() *Engine {
 
 func (e *Engine) ExecuteWorkflow(ctx context.Context, workflow *Workflow, executor JobExecutor) error {
 	e.logger.Infof("Starting workflow execution: %s", workflow.Name)
-	
+
 	workflow.Status = WorkflowStatusRunning
 	now := time.Now()
 	workflow.StartedAt = &now
 
 	for i := range workflow.Jobs {
 		job := &workflow.Jobs[i]
-		
+
 		e.logger.Infof("Executing job: %s", job.Name)
-		
+
 		if err := executor.ExecuteJob(ctx, job); err != nil {
 			e.logger.Errorf("Job %s failed: %v", job.Name, err)
 			workflow.Status = WorkflowStatusFailed
@@ -41,14 +41,14 @@ func (e *Engine) ExecuteWorkflow(ctx context.Context, workflow *Workflow, execut
 			workflow.FinishedAt = &finishedAt
 			return fmt.Errorf("job %s failed: %w", job.Name, err)
 		}
-		
+
 		e.logger.Infof("Job %s completed successfully", job.Name)
 	}
 
 	workflow.Status = WorkflowStatusCompleted
 	finishedAt := time.Now()
 	workflow.FinishedAt = &finishedAt
-	
+
 	e.logger.Infof("Workflow completed successfully: %s", workflow.Name)
 	return nil
 }
@@ -80,12 +80,23 @@ func (e *Engine) validateJob(job *Job) error {
 		return fmt.Errorf("job must have at least one command")
 	}
 
-	if job.Container == nil {
-		return fmt.Errorf("job must have a container specification")
-	}
+	if len(job.Containers) > 0 {
+		for i, container := range job.Containers {
+			if container.Image == "" {
+				return fmt.Errorf("container %d image is required", i)
+			}
+			if container.Name == "" {
+				return fmt.Errorf("container %d name is required", i)
+			}
+		}
+	} else {
+		if job.Container == nil {
+			return fmt.Errorf("job must have a container specification")
+		}
 
-	if job.Container.Image == "" {
-		return fmt.Errorf("container image is required")
+		if job.Container.Image == "" {
+			return fmt.Errorf("container image is required")
+		}
 	}
 
 	return nil

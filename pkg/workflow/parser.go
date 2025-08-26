@@ -14,11 +14,18 @@ type SimpleWorkflowSpec struct {
 }
 
 type SimpleStepSpec struct {
-	Summary string `yaml:"summary,omitempty"`
-	Image   string `yaml:"image"`
+	Summary    string                  `yaml:"summary,omitempty"`
+	Image      string                  `yaml:"image"`
+	Command    []string                `yaml:"command,omitempty"`
+	Containers []SimpleContainerSpec   `yaml:"containers,omitempty"`
+	Env        map[string]string       `yaml:"env,omitempty"`
+	WorkDir    string                  `yaml:"workdir,omitempty"`
+}
+
+type SimpleContainerSpec struct {
+	Name    string   `yaml:"name"`
+	Image   string   `yaml:"image"`
 	Command []string `yaml:"command,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
-	WorkDir string `yaml:"workdir,omitempty"`
 }
 
 func ParseSimpleWorkflow(filename string) (*SimpleWorkflowSpec, error) {
@@ -55,17 +62,32 @@ func ConvertToWorkflow(spec *SimpleWorkflowSpec) *Workflow {
 			Name:        stepName,
 			Description: stepSpec.Summary,
 			Commands:    make([]Command, 1), // Dummy command for validation
-			Container: &ContainerSpec{
-				Image:   stepSpec.Image,
-				Command: stepSpec.Command, // Correctly assign command
-			},
-			Status: JobStatusPending,
+			Status:      JobStatusPending,
 		}
 
 		// Add a dummy command to pass validation in engine
 		job.Commands[0] = Command{
 			ID:     fmt.Sprintf("cmd-%d-0", jobIndex),
 			Status: CommandStatusPending,
+		}
+
+		// Check if containers are defined (multi-container format)
+		if len(stepSpec.Containers) > 0 {
+			// Multi-container format
+			job.Containers = make([]ContainerSpec, len(stepSpec.Containers))
+			for i, containerSpec := range stepSpec.Containers {
+				job.Containers[i] = ContainerSpec{
+					Name:    containerSpec.Name,
+					Image:   containerSpec.Image,
+					Command: containerSpec.Command,
+				}
+			}
+		} else {
+			// Single container format (backward compatibility)
+			job.Container = &ContainerSpec{
+				Image:   stepSpec.Image,
+				Command: stepSpec.Command,
+			}
 		}
 
 		if stepSpec.Env != nil {
