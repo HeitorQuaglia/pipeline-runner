@@ -13,7 +13,8 @@ type Engine struct {
 }
 
 type JobExecutor interface {
-	ExecuteJob(ctx context.Context, job *Job) error
+	ExecuteJob(ctx context.Context, job *Job, workflowVariables map[string]string) error
+	InitializeVolumes(volumes map[string]VolumeSpec) error
 }
 
 func NewEngine() *Engine {
@@ -29,12 +30,20 @@ func (e *Engine) ExecuteWorkflow(ctx context.Context, workflow *Workflow, execut
 	now := time.Now()
 	workflow.StartedAt = &now
 
+	if err := executor.InitializeVolumes(workflow.Volumes); err != nil {
+		e.logger.Errorf("Failed to initialize volumes: %v", err)
+		workflow.Status = WorkflowStatusFailed
+		finishedAt := time.Now()
+		workflow.FinishedAt = &finishedAt
+		return fmt.Errorf("failed to initialize volumes: %w", err)
+	}
+
 	for i := range workflow.Jobs {
 		job := &workflow.Jobs[i]
 
 		e.logger.Infof("Executing job: %s", job.Name)
 
-		if err := executor.ExecuteJob(ctx, job); err != nil {
+		if err := executor.ExecuteJob(ctx, job, workflow.Variables); err != nil {
 			e.logger.Errorf("Job %s failed: %v", job.Name, err)
 			workflow.Status = WorkflowStatusFailed
 			finishedAt := time.Now()

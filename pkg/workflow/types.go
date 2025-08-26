@@ -65,6 +65,7 @@ type Workflow struct {
 	
 	Variables   map[string]string `json:"variables,omitempty" yaml:"variables,omitempty"`
 	Secrets     []string          `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	Volumes     map[string]VolumeSpec `json:"volumes,omitempty" yaml:"volumes,omitempty"`
 	
 	Jobs        []Job             `json:"jobs" yaml:"jobs"`
 	Rules       []Rule            `json:"rules,omitempty" yaml:"rules,omitempty"`
@@ -90,6 +91,7 @@ type Job struct {
 	Rules        []Rule            `json:"rules,omitempty" yaml:"rules,omitempty"`
 	
 	Environment  map[string]string `json:"environment,omitempty" yaml:"environment,omitempty"`
+	Variables    map[string]string `json:"variables,omitempty" yaml:"variables,omitempty"`
 	WorkingDir   string            `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
 	
 	Container    *ContainerSpec    `json:"container,omitempty" yaml:"container,omitempty"`
@@ -170,9 +172,18 @@ type ContainerSpec struct {
 }
 
 type VolumeMount struct {
-	Source      string `json:"source" yaml:"source"`
-	Destination string `json:"destination" yaml:"destination"`
+	Name        string `json:"name" yaml:"name"`
+	Source      string `json:"source,omitempty" yaml:"source,omitempty"`
+	Destination string `json:"destination,omitempty" yaml:"destination,omitempty"`
+	MountPath   string `json:"mount_path,omitempty" yaml:"mount_path,omitempty"`
 	ReadOnly    bool   `json:"read_only,omitempty" yaml:"read_only,omitempty"`
+}
+
+type VolumeSpec struct {
+	Name        string `json:"name,omitempty" yaml:"name,omitempty"`
+	Type        string `json:"type" yaml:"type"`
+	HostPath    string `json:"host_path,omitempty" yaml:"host_path,omitempty"`
+	Size        string `json:"size,omitempty" yaml:"size,omitempty"`
 }
 
 type PortMapping struct {

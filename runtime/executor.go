@@ -5,12 +5,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/sirupsen/logrus"
@@ -19,8 +22,16 @@ import (
 )
 
 type ContainerExecutor struct {
-	client *client.Client
-	logger *logrus.Logger
+	client        *client.Client
+	logger        *logrus.Logger
+	volumeManager *VolumeManager
+}
+
+type VolumeManager struct {
+	volumes map[string]string
+	baseDir string
+	logger  *logrus.Logger
+	mutex   sync.RWMutex
 }
 
 func NewContainerExecutor() (*ContainerExecutor, error) {
@@ -29,13 +40,83 @@ func NewContainerExecutor() (*ContainerExecutor, error) {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
 
+	logger := logrus.New()
+	volumeManager, err := NewVolumeManager(logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create volume manager: %w", err)
+	}
+
 	return &ContainerExecutor{
-		client: cli,
-		logger: logrus.New(),
+		client:        cli,
+		logger:        logger,
+		volumeManager: volumeManager,
 	}, nil
 }
 
-func (e *ContainerExecutor) ExecuteJob(ctx context.Context, job *workflow.Job) error {
+func NewVolumeManager(logger *logrus.Logger) (*VolumeManager, error) {
+	baseDir := ".runner-volumes"
+
+	// Convert to absolute path
+	absBaseDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path for volumes directory: %w", err)
+	}
+
+	if err := os.MkdirAll(absBaseDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create volumes directory: %w", err)
+	}
+
+	return &VolumeManager{
+		volumes: make(map[string]string),
+		baseDir: absBaseDir,
+		logger:  logger,
+	}, nil
+}
+
+func (vm *VolumeManager) EnsureVolume(volumeName string) (string, error) {
+	vm.mutex.Lock()
+	defer vm.mutex.Unlock()
+
+	// Check if volume already exists
+	if hostPath, exists := vm.volumes[volumeName]; exists {
+		return hostPath, nil
+	}
+
+	// Create new volume directory
+	hostPath := filepath.Join(vm.baseDir, volumeName)
+	if err := os.MkdirAll(hostPath, 0755); err != nil {
+		return "", fmt.Errorf("failed to create volume directory %s: %w", hostPath, err)
+	}
+
+	vm.volumes[volumeName] = hostPath
+	vm.logger.Infof("Created volume %s at %s", volumeName, hostPath)
+	return hostPath, nil
+}
+
+func (vm *VolumeManager) GetVolumePath(volumeName string) (string, bool) {
+	vm.mutex.RLock()
+	defer vm.mutex.RUnlock()
+
+	hostPath, exists := vm.volumes[volumeName]
+	return hostPath, exists
+}
+
+func (vm *VolumeManager) Cleanup() error {
+	vm.mutex.Lock()
+	defer vm.mutex.Unlock()
+
+	for volumeName, hostPath := range vm.volumes {
+		vm.logger.Infof("Cleaning up volume %s at %s", volumeName, hostPath)
+		if err := os.RemoveAll(hostPath); err != nil {
+			vm.logger.Warnf("Failed to remove volume directory %s: %v", hostPath, err)
+		}
+	}
+
+	vm.volumes = make(map[string]string)
+	return nil
+}
+
+func (e *ContainerExecutor) ExecuteJob(ctx context.Context, job *workflow.Job, workflowVariables map[string]string) error {
 	e.logger.Infof("Starting job: %s", job.Name)
 
 	job.Status = workflow.JobStatusRunning
@@ -43,7 +124,7 @@ func (e *ContainerExecutor) ExecuteJob(ctx context.Context, job *workflow.Job) e
 	job.StartedAt = &now
 
 	if len(job.Containers) > 0 {
-		if err := e.executeMultipleContainers(ctx, job); err != nil {
+		if err := e.executeMultipleContainers(ctx, job, workflowVariables); err != nil {
 			job.Status = workflow.JobStatusFailed
 			finishedAt := time.Now()
 			job.FinishedAt = &finishedAt
@@ -55,7 +136,7 @@ func (e *ContainerExecutor) ExecuteJob(ctx context.Context, job *workflow.Job) e
 		}
 
 		for i := range job.Commands {
-			if err := e.executeCommand(ctx, job, &job.Commands[i]); err != nil {
+			if err := e.executeCommand(ctx, job, &job.Commands[i], workflowVariables); err != nil {
 				job.Status = workflow.JobStatusFailed
 				finishedAt := time.Now()
 				job.FinishedAt = &finishedAt
@@ -72,7 +153,40 @@ func (e *ContainerExecutor) ExecuteJob(ctx context.Context, job *workflow.Job) e
 	return nil
 }
 
-func (e *ContainerExecutor) executeMultipleContainers(ctx context.Context, job *workflow.Job) error {
+func (e *ContainerExecutor) InitializeVolumes(volumes map[string]workflow.VolumeSpec) error {
+	if volumes == nil {
+		return nil
+	}
+
+	e.logger.Infof("Initializing %d volumes", len(volumes))
+	for volumeName, volumeSpec := range volumes {
+		switch volumeSpec.Type {
+		case "host":
+			if volumeSpec.HostPath != "" {
+				// Use specified host path - ensure it's absolute
+				absHostPath, err := filepath.Abs(volumeSpec.HostPath)
+				if err != nil {
+					return fmt.Errorf("failed to get absolute path for %s: %w", volumeSpec.HostPath, err)
+				}
+				if err := os.MkdirAll(absHostPath, 0755); err != nil {
+					return fmt.Errorf("failed to create host path %s for volume %s: %w", absHostPath, volumeName, err)
+				}
+				e.volumeManager.volumes[volumeName] = absHostPath
+			} else {
+				// Create managed host path
+				if _, err := e.volumeManager.EnsureVolume(volumeName); err != nil {
+					return fmt.Errorf("failed to ensure volume %s: %w", volumeName, err)
+				}
+			}
+		default:
+			return fmt.Errorf("unsupported volume type: %s for volume %s", volumeSpec.Type, volumeName)
+		}
+	}
+
+	return nil
+}
+
+func (e *ContainerExecutor) executeMultipleContainers(ctx context.Context, job *workflow.Job, workflowVariables map[string]string) error {
 	e.logger.Infof("Executing %d containers for job: %s", len(job.Containers), job.Name)
 
 	var wg sync.WaitGroup
@@ -82,7 +196,7 @@ func (e *ContainerExecutor) executeMultipleContainers(ctx context.Context, job *
 		wg.Add(1)
 		go func(containerSpec *workflow.ContainerSpec) {
 			defer wg.Done()
-			if err := e.executeContainer(ctx, job, containerSpec); err != nil {
+			if err := e.executeContainer(ctx, job, containerSpec, workflowVariables); err != nil {
 				errCh <- fmt.Errorf("container %s failed: %w", containerSpec.Name, err)
 			}
 		}(&job.Containers[i])
@@ -104,7 +218,7 @@ func (e *ContainerExecutor) executeMultipleContainers(ctx context.Context, job *
 	return nil
 }
 
-func (e *ContainerExecutor) executeContainer(ctx context.Context, job *workflow.Job, containerSpec *workflow.ContainerSpec) error {
+func (e *ContainerExecutor) executeContainer(ctx context.Context, job *workflow.Job, containerSpec *workflow.ContainerSpec, workflowVariables map[string]string) error {
 	e.logger.Infof("Executing container %s in job %s", containerSpec.Name, job.Name)
 
 	image := containerSpec.Image
@@ -118,8 +232,31 @@ func (e *ContainerExecutor) executeContainer(ctx context.Context, job *workflow.
 
 	containerConfig := &container.Config{
 		Image: image,
-		Env:   e.buildEnvVarsForContainer(job, containerSpec),
+		Env:   e.buildEnvVarsForContainer(job, containerSpec, workflowVariables),
 		Cmd:   containerSpec.Command,
+	}
+
+	// Prepare host config with volume mounts
+	hostConfig := &container.HostConfig{}
+	if len(containerSpec.Volumes) > 0 {
+		mounts := make([]mount.Mount, 0, len(containerSpec.Volumes))
+		for _, volumeMount := range containerSpec.Volumes {
+			hostPath, err := e.volumeManager.EnsureVolume(volumeMount.Name)
+			if err != nil {
+				return fmt.Errorf("failed to ensure volume %s: %w", volumeMount.Name, err)
+			}
+
+			mountType := mount.TypeBind
+			mounts = append(mounts, mount.Mount{
+				Type:     mountType,
+				Source:   hostPath,
+				Target:   volumeMount.MountPath,
+				ReadOnly: volumeMount.ReadOnly,
+			})
+
+			e.logger.Infof("Mounting volume %s: %s -> %s", volumeMount.Name, hostPath, volumeMount.MountPath)
+		}
+		hostConfig.Mounts = mounts
 	}
 
 	if containerSpec.WorkingDir != "" {
@@ -128,7 +265,7 @@ func (e *ContainerExecutor) executeContainer(ctx context.Context, job *workflow.
 		containerConfig.WorkingDir = job.WorkingDir
 	}
 
-	resp, err := e.client.ContainerCreate(ctx, containerConfig, nil, nil, nil, "")
+	resp, err := e.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, "")
 	if err != nil {
 		return fmt.Errorf("failed to create container: %w", err)
 	}
@@ -171,7 +308,7 @@ func (e *ContainerExecutor) executeContainer(ctx context.Context, job *workflow.
 	return nil
 }
 
-func (e *ContainerExecutor) executeCommand(ctx context.Context, job *workflow.Job, cmd *workflow.Command) error {
+func (e *ContainerExecutor) executeCommand(ctx context.Context, job *workflow.Job, cmd *workflow.Command, workflowVariables map[string]string) error {
 	e.logger.Infof("Executing command in job %s", job.Name)
 
 	cmd.Status = workflow.CommandStatusRunning
@@ -189,7 +326,7 @@ func (e *ContainerExecutor) executeCommand(ctx context.Context, job *workflow.Jo
 
 	containerConfig := &container.Config{
 		Image: image,
-		Env:   e.buildEnvVars(job),
+		Env:   e.buildEnvVars(job, workflowVariables),
 		Cmd:   job.Container.Command,
 	}
 
@@ -291,13 +428,25 @@ func (e *ContainerExecutor) getContainerLogs(ctx context.Context, containerID st
 	return output.String(), nil
 }
 
-func (e *ContainerExecutor) buildEnvVars(job *workflow.Job) []string {
+func (e *ContainerExecutor) buildEnvVars(job *workflow.Job, workflowVariables map[string]string) []string {
 	var envVars []string
 
+	// Add workflow-level variables first
+	for key, value := range workflowVariables {
+		envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	// Add job-level variables (these can override workflow variables)
+	for key, value := range job.Variables {
+		envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	// Add job environment variables
 	for key, value := range job.Environment {
 		envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
 	}
 
+	// Add container-specific environment variables
 	if job.Container != nil && job.Container.Environment != nil {
 		for key, value := range job.Container.Environment {
 			envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
@@ -307,13 +456,25 @@ func (e *ContainerExecutor) buildEnvVars(job *workflow.Job) []string {
 	return envVars
 }
 
-func (e *ContainerExecutor) buildEnvVarsForContainer(job *workflow.Job, containerSpec *workflow.ContainerSpec) []string {
+func (e *ContainerExecutor) buildEnvVarsForContainer(job *workflow.Job, containerSpec *workflow.ContainerSpec, workflowVariables map[string]string) []string {
 	var envVars []string
 
+	// Add workflow-level variables first
+	for key, value := range workflowVariables {
+		envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	// Add job-level variables (these can override workflow variables)
+	for key, value := range job.Variables {
+		envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	// Add job environment variables
 	for key, value := range job.Environment {
 		envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
 	}
 
+	// Add container-specific environment variables (these can override all above)
 	if containerSpec.Environment != nil {
 		for key, value := range containerSpec.Environment {
 			envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
@@ -324,6 +485,12 @@ func (e *ContainerExecutor) buildEnvVarsForContainer(job *workflow.Job, containe
 }
 
 func (e *ContainerExecutor) Close() error {
+	if e.volumeManager != nil {
+		if err := e.volumeManager.Cleanup(); err != nil {
+			e.logger.Warnf("Failed to cleanup volumes: %v", err)
+		}
+	}
+
 	if e.client != nil {
 		return e.client.Close()
 	}
