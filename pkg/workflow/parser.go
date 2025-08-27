@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,6 +29,11 @@ type SimpleStepSpec struct {
 	When          interface{}           `yaml:"when,omitempty"`
 	Artifacts     []SimpleArtifactSpec  `yaml:"artifacts,omitempty"`
 	UsesArtifacts []SimpleArtifactMount `yaml:"uses_artifacts,omitempty"`
+	
+	// Error handling
+	Retry        *int  `yaml:"retry,omitempty"`
+	RetryDelay   *int  `yaml:"retry_delay,omitempty"` // seconds
+	AllowFailure *bool `yaml:"allow_failure,omitempty"`
 }
 
 type SimpleContainerSpec struct {
@@ -239,6 +245,22 @@ func ConvertToWorkflow(spec *SimpleWorkflowSpec) *Workflow {
 					Name: artifactMount.Name,
 					Path: artifactMount.Path,
 				}
+			}
+		}
+
+		// Parse error handling settings
+		if stepSpec.AllowFailure != nil {
+			job.AllowFailure = *stepSpec.AllowFailure
+		}
+		
+		if stepSpec.Retry != nil || stepSpec.RetryDelay != nil {
+			job.RetryPolicy = &RetryPolicy{}
+			if stepSpec.Retry != nil {
+				job.RetryPolicy.MaxAttempts = *stepSpec.Retry
+			}
+			if stepSpec.RetryDelay != nil {
+				delayDuration := time.Duration(*stepSpec.RetryDelay) * time.Second
+				job.RetryPolicy.InitialDelay = &delayDuration
 			}
 		}
 

@@ -228,9 +228,14 @@ func (e *Engine) executeJobsWithDependencies(ctx context.Context, scheduler *Dep
 				e.logger.Debugf("Job %s has %d dependencies", j.Name, len(j.DependsOn))
 
 				if err := executor.ExecuteJob(ctx, j, workflowVariables); err != nil {
-					e.logger.Errorf("Job %s failed: %v", j.Name, err)
-					scheduler.MarkFailed(j.Name)
-					errChan <- fmt.Errorf("job %s failed: %w", j.Name, err)
+					if j.AllowFailure {
+						e.logger.Warnf("Job %s failed but marked as allowed to fail: %v", j.Name, err)
+						scheduler.MarkCompleted(j.Name) // Treat as completed to allow dependent jobs to run
+					} else {
+						e.logger.Errorf("Job %s failed: %v", j.Name, err)
+						scheduler.MarkFailed(j.Name)
+						errChan <- fmt.Errorf("job %s failed: %w", j.Name, err)
+					}
 				} else {
 					e.logger.Infof("Job %s completed successfully", j.Name)
 					scheduler.MarkCompleted(j.Name)

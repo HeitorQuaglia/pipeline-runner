@@ -55,11 +55,76 @@ func (e *ContainerExecutor) ExecuteJob(ctx context.Context, job *workflow.Job, w
 	now := time.Now()
 	job.StartedAt = &now
 
+	// Execute job with retry logic
+	err := e.executeJobWithRetry(ctx, job, workflowVariables)
+	
+	if err != nil {
+		job.Status = workflow.JobStatusFailed
+		finishedAt := time.Now()
+		job.FinishedAt = &finishedAt
+		
+		if job.AllowFailure {
+			e.logger.Warnf("Job %s failed but marked as allowed to fail: %v", job.Name, err)
+			job.Status = workflow.JobStatusCompleted
+			return nil
+		}
+		
+		return err
+	}
+
+	job.Status = workflow.JobStatusCompleted
+	finishedAt := time.Now()
+	job.FinishedAt = &finishedAt
+
+	e.logger.Infof("Job completed: %s", job.Name)
+	return nil
+}
+
+func (e *ContainerExecutor) executeJobWithRetry(ctx context.Context, job *workflow.Job, workflowVariables map[string]string) error {
+	maxAttempts := 1
+	var delay time.Duration
+	
+	if job.RetryPolicy != nil {
+		if job.RetryPolicy.MaxAttempts > 0 {
+			maxAttempts = job.RetryPolicy.MaxAttempts
+		}
+		if job.RetryPolicy.InitialDelay != nil {
+			delay = *job.RetryPolicy.InitialDelay
+		}
+	}
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			e.logger.Infof("Job %s - Retry attempt %d/%d", job.Name, attempt, maxAttempts)
+			if delay > 0 {
+				e.logger.Debugf("Waiting %v before retry", delay)
+				time.Sleep(delay)
+			}
+		} else {
+			e.logger.Infof("Job %s - Attempt %d/%d", job.Name, attempt, maxAttempts)
+		}
+
+		err := e.executeJobCore(ctx, job, workflowVariables)
+		if err == nil {
+			if attempt > 1 {
+				e.logger.Infof("Job %s succeeded on attempt %d/%d", job.Name, attempt, maxAttempts)
+			}
+			return nil
+		}
+
+		e.logger.Warnf("Job %s failed on attempt %d/%d: %v", job.Name, attempt, maxAttempts, err)
+		
+		if attempt == maxAttempts {
+			return fmt.Errorf("job failed after %d attempts: %w", maxAttempts, err)
+		}
+	}
+	
+	return nil
+}
+
+func (e *ContainerExecutor) executeJobCore(ctx context.Context, job *workflow.Job, workflowVariables map[string]string) error {
 	if len(job.Containers) > 0 {
 		if err := e.executeMultipleContainers(ctx, job, workflowVariables); err != nil {
-			job.Status = workflow.JobStatusFailed
-			finishedAt := time.Now()
-			job.FinishedAt = &finishedAt
 			return fmt.Errorf("multi-container execution failed: %w", err)
 		}
 	} else {
@@ -69,19 +134,11 @@ func (e *ContainerExecutor) ExecuteJob(ctx context.Context, job *workflow.Job, w
 
 		for i := range job.Commands {
 			if err := e.executeCommand(ctx, job, &job.Commands[i], workflowVariables); err != nil {
-				job.Status = workflow.JobStatusFailed
-				finishedAt := time.Now()
-				job.FinishedAt = &finishedAt
 				return fmt.Errorf("command failed: %w", err)
 			}
 		}
 	}
-
-	job.Status = workflow.JobStatusCompleted
-	finishedAt := time.Now()
-	job.FinishedAt = &finishedAt
-
-	e.logger.Infof("Job completed: %s", job.Name)
+	
 	return nil
 }
 
