@@ -230,7 +230,6 @@ func (e *ContainerExecutor) executeCommand(ctx context.Context, job *workflow.Jo
 }
 
 func (e *ContainerExecutor) pullImage(ctx context.Context, imageName string) error {
-	// Check cache first using the full validation method
 	isCached, err := e.imageCache.IsImageCached(ctx, e.client, imageName)
 	if err != nil {
 		e.logger.Warnf("Failed to check image cache for %s: %v", imageName, err)
@@ -257,7 +256,6 @@ func (e *ContainerExecutor) pullImage(ctx context.Context, imageName string) err
 		return err
 	}
 
-	// Add to cache after successful pull
 	if err := e.imageCache.AddImage(ctx, e.client, imageName); err != nil {
 		e.logger.Warnf("Failed to cache image %s: %v", imageName, err)
 	}

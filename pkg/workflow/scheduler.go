@@ -10,13 +10,15 @@ import (
 )
 
 type DependencyScheduler struct {
-	jobs      map[string]*Job
-	completed map[string]bool
-	failed    map[string]bool
-	skipped   map[string]bool
-	running   map[string]bool
-	logger    *logrus.Logger
-	mutex     sync.RWMutex
+	jobs       map[string]*Job
+	completed  map[string]bool
+	failed     map[string]bool
+	skipped    map[string]bool
+	running    map[string]bool
+	jobResults map[string]JobResult
+	logger     *logrus.Logger
+	mutex      sync.RWMutex
+	evaluator  *ConditionEvaluator
 }
 
 type JobExecutor interface {
@@ -26,12 +28,14 @@ type JobExecutor interface {
 
 func NewDependencyScheduler(jobs []Job, logger *logrus.Logger) *DependencyScheduler {
 	scheduler := &DependencyScheduler{
-		jobs:      make(map[string]*Job),
-		completed: make(map[string]bool),
-		failed:    make(map[string]bool),
-		skipped:   make(map[string]bool),
-		running:   make(map[string]bool),
-		logger:    logger,
+		jobs:       make(map[string]*Job),
+		completed:  make(map[string]bool),
+		failed:     make(map[string]bool),
+		skipped:    make(map[string]bool),
+		running:    make(map[string]bool),
+		jobResults: make(map[string]JobResult),
+		logger:     logger,
+		evaluator:  NewConditionEvaluator(logger),
 	}
 
 	for i := range jobs {
@@ -41,7 +45,7 @@ func NewDependencyScheduler(jobs []Job, logger *logrus.Logger) *DependencySchedu
 	return scheduler
 }
 
-func (ds *DependencyScheduler) CanExecute(jobName string) bool {
+func (ds *DependencyScheduler) CanExecute(jobName string, variables map[string]string) bool {
 	ds.mutex.RLock()
 	job := ds.jobs[jobName]
 	if job == nil {
@@ -64,6 +68,11 @@ func (ds *DependencyScheduler) CanExecute(jobName string) bool {
 			}
 		}
 	}
+
+	jobResultsCopy := make(map[string]JobResult)
+	for k, v := range ds.jobResults {
+		jobResultsCopy[k] = v
+	}
 	ds.mutex.RUnlock()
 
 	if shouldSkip {
@@ -73,6 +82,27 @@ func (ds *DependencyScheduler) CanExecute(jobName string) bool {
 		ds.logger.Warnf("Job %s skipped due to failed dependency", jobName)
 		ds.mutex.Unlock()
 		return false
+	}
+
+	if canExecute && job.When != nil {
+		shouldExecute, err := ds.evaluator.ShouldExecuteJob(job, variables, jobResultsCopy)
+		if err != nil {
+			ds.logger.Errorf("Failed to evaluate condition for job %s: %v", jobName, err)
+			ds.mutex.Lock()
+			ds.skipped[jobName] = true
+			job.Status = JobStatusSkipped
+			ds.mutex.Unlock()
+			return false
+		}
+
+		if !shouldExecute {
+			ds.mutex.Lock()
+			ds.skipped[jobName] = true
+			job.Status = JobStatusSkipped
+			ds.logger.Infof("Job %s skipped due to condition", jobName)
+			ds.mutex.Unlock()
+			return false
+		}
 	}
 
 	return canExecute
@@ -89,6 +119,11 @@ func (ds *DependencyScheduler) MarkCompleted(jobName string) {
 	defer ds.mutex.Unlock()
 	delete(ds.running, jobName)
 	ds.completed[jobName] = true
+	ds.jobResults[jobName] = JobResult{
+		Status:   JobStatusCompleted,
+		ExitCode: nil,
+		Failed:   false,
+	}
 }
 
 func (ds *DependencyScheduler) MarkFailed(jobName string) {
@@ -96,12 +131,17 @@ func (ds *DependencyScheduler) MarkFailed(jobName string) {
 	defer ds.mutex.Unlock()
 	delete(ds.running, jobName)
 	ds.failed[jobName] = true
+	ds.jobResults[jobName] = JobResult{
+		Status:   JobStatusFailed,
+		ExitCode: nil,
+		Failed:   true,
+	}
 }
 
-func (ds *DependencyScheduler) GetReadyJobs() []*Job {
+func (ds *DependencyScheduler) GetReadyJobs(variables map[string]string) []*Job {
 	var readyJobs []*Job
 	for jobName, job := range ds.jobs {
-		if ds.CanExecute(jobName) {
+		if ds.CanExecute(jobName, variables) {
 			readyJobs = append(readyJobs, job)
 		}
 	}
@@ -168,7 +208,7 @@ func (e *Engine) executeJobsWithDependencies(ctx context.Context, scheduler *Dep
 	errChan := make(chan error, len(scheduler.jobs))
 
 	for scheduler.HasPendingJobs() {
-		readyJobs := scheduler.GetReadyJobs()
+		readyJobs := scheduler.GetReadyJobs(workflowVariables)
 
 		if len(readyJobs) == 0 {
 			e.logger.Debugf("No jobs ready, waiting...")

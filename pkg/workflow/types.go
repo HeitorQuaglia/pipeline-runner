@@ -104,6 +104,8 @@ type Job struct {
 	AllowFailure bool              `json:"allow_failure,omitempty" yaml:"allow_failure,omitempty"`
 	RunnerTags   []string          `json:"runner_tags,omitempty" yaml:"runner_tags,omitempty"`
 	
+	When         Condition         `json:"when,omitempty" yaml:"when,omitempty"`
+	
 	Status       JobStatus         `json:"status"`
 	StartedAt    *time.Time        `json:"started_at,omitempty"`
 	FinishedAt   *time.Time        `json:"finished_at,omitempty"`

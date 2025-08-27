@@ -3,6 +3,7 @@ package workflow
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,6 +25,7 @@ type SimpleStepSpec struct {
 	Env        map[string]string     `yaml:"env,omitempty"`
 	Variables  map[string]string     `yaml:"variables,omitempty"`
 	WorkDir    string                `yaml:"workdir,omitempty"`
+	When       interface{}           `yaml:"when,omitempty"`
 }
 
 type SimpleContainerSpec struct {
@@ -61,6 +63,59 @@ func ParseSimpleWorkflow(filename string) (*SimpleWorkflowSpec, error) {
 	}
 
 	return &spec, nil
+}
+
+func parseCondition(whenValue interface{}) (Condition, error) {
+	if whenValue == nil {
+		return nil, nil
+	}
+
+	if str, ok := whenValue.(string); ok {
+		switch strings.ToLower(strings.TrimSpace(str)) {
+		case "always":
+			return AlwaysCondition{}, nil
+		case "never":
+			return NeverCondition{}, nil
+		default:
+			return nil, fmt.Errorf("unknown string condition: %s", str)
+		}
+	}
+
+	if condMap, ok := whenValue.(map[string]interface{}); ok {
+		if variable, hasVar := condMap["variable"]; hasVar {
+			if equals, hasEquals := condMap["equals"]; hasEquals {
+				varStr, varOk := variable.(string)
+				equalsStr, equalsOk := equals.(string)
+				if !varOk || !equalsOk {
+					return nil, fmt.Errorf("variable and equals must be strings")
+				}
+				return VariableCondition{
+					Variable: varStr,
+					Equals:   equalsStr,
+				}, nil
+			}
+			return nil, fmt.Errorf("variable condition must have 'equals' field")
+		}
+
+		if job, hasJob := condMap["job"]; hasJob {
+			if status, hasStatus := condMap["status"]; hasStatus {
+				jobStr, jobOk := job.(string)
+				statusStr, statusOk := status.(string)
+				if !jobOk || !statusOk {
+					return nil, fmt.Errorf("job and status must be strings")
+				}
+				return JobStatusCondition{
+					Job:    jobStr,
+					Status: statusStr,
+				}, nil
+			}
+			return nil, fmt.Errorf("job condition must have 'status' field")
+		}
+
+		return nil, fmt.Errorf("unknown condition map structure")
+	}
+
+	return nil, fmt.Errorf("invalid condition type: %T", whenValue)
 }
 
 func ConvertToWorkflow(spec *SimpleWorkflowSpec) *Workflow {
@@ -144,6 +199,15 @@ func ConvertToWorkflow(spec *SimpleWorkflowSpec) *Workflow {
 
 		if stepSpec.WorkDir != "" {
 			job.WorkingDir = stepSpec.WorkDir
+		}
+
+		if stepSpec.When != nil {
+			condition, err := parseCondition(stepSpec.When)
+			if err != nil {
+				fmt.Printf("Warning: failed to parse condition for job %s: %v\n", stepName, err)
+			} else {
+				job.When = condition
+			}
 		}
 
 		workflow.Jobs = append(workflow.Jobs, job)
