@@ -17,10 +17,6 @@
 # Go workspace file
 go.work
 
-# Compiled executables
-runner
-server
-
 # Log files
 *.log
 

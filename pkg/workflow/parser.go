@@ -17,15 +17,17 @@ type SimpleWorkflowSpec struct {
 }
 
 type SimpleStepSpec struct {
-	Summary    string                `yaml:"summary,omitempty"`
-	Image      string                `yaml:"image"`
-	Command    []string              `yaml:"command,omitempty"`
-	Containers []SimpleContainerSpec `yaml:"containers,omitempty"`
-	DependsOn  []string              `yaml:"depends_on,omitempty"`
-	Env        map[string]string     `yaml:"env,omitempty"`
-	Variables  map[string]string     `yaml:"variables,omitempty"`
-	WorkDir    string                `yaml:"workdir,omitempty"`
-	When       interface{}           `yaml:"when,omitempty"`
+	Summary       string                `yaml:"summary,omitempty"`
+	Image         string                `yaml:"image"`
+	Command       []string              `yaml:"command,omitempty"`
+	Containers    []SimpleContainerSpec `yaml:"containers,omitempty"`
+	DependsOn     []string              `yaml:"depends_on,omitempty"`
+	Env           map[string]string     `yaml:"env,omitempty"`
+	Variables     map[string]string     `yaml:"variables,omitempty"`
+	WorkDir       string                `yaml:"workdir,omitempty"`
+	When          interface{}           `yaml:"when,omitempty"`
+	Artifacts     []SimpleArtifactSpec  `yaml:"artifacts,omitempty"`
+	UsesArtifacts []SimpleArtifactMount `yaml:"uses_artifacts,omitempty"`
 }
 
 type SimpleContainerSpec struct {
@@ -45,6 +47,16 @@ type SimpleVolumeSpec struct {
 	Type     string `yaml:"type"`
 	HostPath string `yaml:"host_path,omitempty"`
 	Size     string `yaml:"size,omitempty"`
+}
+
+type SimpleArtifactSpec struct {
+	Name string `yaml:"name"`
+	Path string `yaml:"path"`
+}
+
+type SimpleArtifactMount struct {
+	Name string `yaml:"name"`
+	Path string `yaml:"path"`
 }
 
 func ParseSimpleWorkflow(filename string) (*SimpleWorkflowSpec, error) {
@@ -207,6 +219,26 @@ func ConvertToWorkflow(spec *SimpleWorkflowSpec) *Workflow {
 				fmt.Printf("Warning: failed to parse condition for job %s: %v\n", stepName, err)
 			} else {
 				job.When = condition
+			}
+		}
+
+		if len(stepSpec.Artifacts) > 0 {
+			job.Artifacts = make([]ArtifactSpec, len(stepSpec.Artifacts))
+			for i, artifactSpec := range stepSpec.Artifacts {
+				job.Artifacts[i] = ArtifactSpec{
+					Name: artifactSpec.Name,
+					Path: artifactSpec.Path,
+				}
+			}
+		}
+
+		if len(stepSpec.UsesArtifacts) > 0 {
+			job.UsesArtifacts = make([]ArtifactMount, len(stepSpec.UsesArtifacts))
+			for i, artifactMount := range stepSpec.UsesArtifacts {
+				job.UsesArtifacts[i] = ArtifactMount{
+					Name: artifactMount.Name,
+					Path: artifactMount.Path,
+				}
 			}
 		}
 

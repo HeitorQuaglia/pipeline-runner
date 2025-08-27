@@ -12,10 +12,11 @@ import (
 )
 
 type ContainerExecutor struct {
-	client        *client.Client
-	logger        *logrus.Logger
-	volumeManager *VolumeManager
-	imageCache    *ImageCache
+	client          *client.Client
+	logger          *logrus.Logger
+	volumeManager   *VolumeManager
+	imageCache      *ImageCache
+	artifactManager *ArtifactManager
 }
 
 func NewContainerExecutor() (*ContainerExecutor, error) {
@@ -31,12 +32,18 @@ func NewContainerExecutor() (*ContainerExecutor, error) {
 	}
 
 	imageCache := NewImageCache(logger)
+	
+	artifactManager, err := NewArtifactManager(logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create artifact manager: %w", err)
+	}
 
 	return &ContainerExecutor{
-		client:        cli,
-		logger:        logger,
-		volumeManager: volumeManager,
-		imageCache:    imageCache,
+		client:          cli,
+		logger:          logger,
+		volumeManager:   volumeManager,
+		imageCache:      imageCache,
+		artifactManager: artifactManager,
 	}, nil
 }
 
@@ -92,6 +99,12 @@ func (e *ContainerExecutor) Close() error {
 	if e.volumeManager != nil {
 		if err := e.volumeManager.Cleanup(); err != nil {
 			e.logger.Warnf("Failed to cleanup volumes: %v", err)
+		}
+	}
+
+	if e.artifactManager != nil {
+		if err := e.artifactManager.Cleanup(); err != nil {
+			e.logger.Warnf("Failed to cleanup artifacts: %v", err)
 		}
 	}
 

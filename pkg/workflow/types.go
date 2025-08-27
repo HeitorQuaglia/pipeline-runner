@@ -111,7 +111,8 @@ type Job struct {
 	FinishedAt   *time.Time        `json:"finished_at,omitempty"`
 	RunnerID     string            `json:"runner_id,omitempty"`
 	
-	Artifacts    []ArtifactSpec    `json:"artifacts,omitempty" yaml:"artifacts,omitempty"`
+	Artifacts     []ArtifactSpec  `json:"artifacts,omitempty" yaml:"artifacts,omitempty"`
+	UsesArtifacts []ArtifactMount `json:"uses_artifacts,omitempty" yaml:"uses_artifacts,omitempty"`
 }
 
 type Command struct {
@@ -220,4 +221,9 @@ type ArtifactSpec struct {
 	Patterns    []string `json:"patterns,omitempty" yaml:"patterns,omitempty"`
 	ExpireAfter *time.Duration `json:"expire_after,omitempty" yaml:"expire_after,omitempty"`
 	Public      bool     `json:"public,omitempty" yaml:"public,omitempty"`
+}
+
+type ArtifactMount struct {
+	Name string `json:"name" yaml:"name"`
+	Path string `json:"path" yaml:"path"`
 }

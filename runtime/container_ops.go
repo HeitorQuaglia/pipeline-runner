@@ -77,8 +77,9 @@ func (e *ContainerExecutor) executeContainer(ctx context.Context, job *workflow.
 	}
 
 	hostConfig := &container.HostConfig{}
+	var mounts []mount.Mount
+
 	if len(containerSpec.Volumes) > 0 {
-		mounts := make([]mount.Mount, 0, len(containerSpec.Volumes))
 		for _, volumeMount := range containerSpec.Volumes {
 			hostPath, err := e.volumeManager.EnsureVolume(volumeMount.Name)
 			if err != nil {
@@ -95,6 +96,28 @@ func (e *ContainerExecutor) executeContainer(ctx context.Context, job *workflow.
 
 			e.logger.Debugf("Mounting volume %s: %s -> %s", volumeMount.Name, hostPath, volumeMount.MountPath)
 		}
+	}
+
+	if len(job.UsesArtifacts) > 0 {
+		e.logger.Debugf("Job %s uses %d artifacts", job.Name, len(job.UsesArtifacts))
+		for _, artifactMount := range job.UsesArtifacts {
+			artifactPath, exists := e.artifactManager.GetArtifactPath(artifactMount.Name)
+			if !exists {
+				return fmt.Errorf("artifact %s not found for job %s", artifactMount.Name, job.Name)
+			}
+
+			mounts = append(mounts, mount.Mount{
+				Type:     mount.TypeBind,
+				Source:   artifactPath,
+				Target:   artifactMount.Path,
+				ReadOnly: true,
+			})
+
+			e.logger.Debugf("Mounting artifact %s: %s -> %s", artifactMount.Name, artifactPath, artifactMount.Path)
+		}
+	}
+
+	if len(mounts) > 0 {
 		hostConfig.Mounts = mounts
 	}
 
@@ -143,6 +166,15 @@ func (e *ContainerExecutor) executeContainer(ctx context.Context, job *workflow.
 		}
 	}
 
+	if len(job.Artifacts) > 0 {
+		e.logger.Debugf("Capturing %d artifacts from job %s", len(job.Artifacts), job.Name)
+		for _, artifact := range job.Artifacts {
+			if err := e.artifactManager.CopyFromContainer(ctx, e.client, resp.ID, artifact); err != nil {
+				e.logger.Warnf("Failed to capture artifact %s: %v", artifact.Name, err)
+			}
+		}
+	}
+
 	e.logger.Infof("Container %s completed successfully", containerSpec.Name)
 	return nil
 }
@@ -175,7 +207,29 @@ func (e *ContainerExecutor) executeCommand(ctx context.Context, job *workflow.Jo
 		containerConfig.WorkingDir = job.WorkingDir
 	}
 
-	resp, err := e.client.ContainerCreate(ctx, containerConfig, nil, nil, nil, "")
+	hostConfig := &container.HostConfig{}
+	if len(job.UsesArtifacts) > 0 {
+		var mounts []mount.Mount
+		e.logger.Debugf("Job %s uses %d artifacts", job.Name, len(job.UsesArtifacts))
+		for _, artifactMount := range job.UsesArtifacts {
+			artifactPath, exists := e.artifactManager.GetArtifactPath(artifactMount.Name)
+			if !exists {
+				return fmt.Errorf("artifact %s not found for job %s", artifactMount.Name, job.Name)
+			}
+
+			mounts = append(mounts, mount.Mount{
+				Type:     mount.TypeBind,
+				Source:   artifactPath,
+				Target:   artifactMount.Path,
+				ReadOnly: true,
+			})
+
+			e.logger.Debugf("Mounting artifact %s: %s -> %s", artifactMount.Name, artifactPath, artifactMount.Path)
+		}
+		hostConfig.Mounts = mounts
+	}
+
+	resp, err := e.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, "")
 	if err != nil {
 		cmd.Status = workflow.CommandStatusFailed
 		return fmt.Errorf("failed to create container: %w", err)
@@ -219,6 +273,15 @@ func (e *ContainerExecutor) executeCommand(ctx context.Context, job *workflow.Jo
 		if exitCode != 0 {
 			cmd.Status = workflow.CommandStatusFailed
 			return fmt.Errorf("command failed with exit code %d", exitCode)
+		}
+	}
+
+	if len(job.Artifacts) > 0 {
+		e.logger.Debugf("Capturing %d artifacts from job %s", len(job.Artifacts), job.Name)
+		for _, artifact := range job.Artifacts {
+			if err := e.artifactManager.CopyFromContainer(ctx, e.client, resp.ID, artifact); err != nil {
+				e.logger.Warnf("Failed to capture artifact %s: %v", artifact.Name, err)
+			}
 		}
 	}
 
