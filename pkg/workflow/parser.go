@@ -13,6 +13,7 @@ type SimpleWorkflowSpec struct {
 	Kind      string                      `yaml:"kind"`
 	Version   int                         `yaml:"version"`
 	Variables map[string]string           `yaml:"variables,omitempty"`
+	Secrets   []string                    `yaml:"secrets,omitempty"`
 	Volumes   map[string]SimpleVolumeSpec `yaml:"volumes,omitempty"`
 	Steps     map[string]SimpleStepSpec   `yaml:"steps"`
 }
@@ -147,6 +148,10 @@ func ConvertToWorkflow(spec *SimpleWorkflowSpec) *Workflow {
 
 	if spec.Variables != nil {
 		workflow.Variables = spec.Variables
+	}
+
+	if spec.Secrets != nil {
+		workflow.Secrets = spec.Secrets
 	}
 
 	if spec.Volumes != nil {

@@ -8,6 +8,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/sirupsen/logrus"
 
+	"basic-container-runtime/pkg/secrets"
 	"basic-container-runtime/pkg/workflow"
 )
 
@@ -17,6 +18,7 @@ type ContainerExecutor struct {
 	volumeManager   *VolumeManager
 	imageCache      *ImageCache
 	artifactManager *ArtifactManager
+	secretManager   *secrets.SecretManager
 }
 
 func NewContainerExecutor() (*ContainerExecutor, error) {
@@ -150,6 +152,10 @@ func (e *ContainerExecutor) PrintCacheStats() {
 			e.logger.Debugf("Cached images: %v", cachedImages)
 		}
 	}
+}
+
+func (e *ContainerExecutor) SetSecretManager(sm *secrets.SecretManager) {
+	e.secretManager = sm
 }
 
 func (e *ContainerExecutor) Close() error {

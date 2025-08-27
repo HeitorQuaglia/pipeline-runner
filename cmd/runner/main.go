@@ -10,6 +10,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"basic-container-runtime/pkg/secrets"
 	"basic-container-runtime/pkg/workflow"
 	"basic-container-runtime/runtime"
 )
@@ -17,14 +18,16 @@ import (
 func main() {
 	var workflowFile string
 	var logLevel string
+	var secretsFile string
 
 	flag.StringVar(&workflowFile, "f", "", "Path to workflow YAML file")
 	flag.StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+	flag.StringVar(&secretsFile, "secrets-file", "", "Path to secrets file (.env format)")
 	flag.Parse()
 
 	if workflowFile == "" {
-		fmt.Println("Usage: runner -f <workflow-file.yaml> [--log-level=<level>]")
-		fmt.Println("Example: runner -f hello-world.yaml --log-level=debug")
+		fmt.Println("Usage: runner -f <workflow-file.yaml> [--log-level=<level>] [--secrets-file=<secrets.env>]")
+		fmt.Println("Example: runner -f hello-world.yaml --log-level=debug --secrets-file=secrets.env")
 		fmt.Println("Log levels: debug, info, warn, error")
 		os.Exit(1)
 	}
@@ -33,7 +36,7 @@ func main() {
 		log.Fatalf("Failed to configure logging: %v", err)
 	}
 
-	if err := runWorkflow(workflowFile); err != nil {
+	if err := runWorkflow(workflowFile, secretsFile); err != nil {
 		log.Fatalf("Workflow execution failed: %v", err)
 	}
 
@@ -56,13 +59,31 @@ func configureLogging(levelStr string) error {
 	return nil
 }
 
-func runWorkflow(filename string) error {
+func runWorkflow(filename, secretsFile string) error {
 	spec, err := workflow.ParseSimpleWorkflow(filename)
 	if err != nil {
 		return fmt.Errorf("failed to parse workflow: %w", err)
 	}
 
 	wf := workflow.ConvertToWorkflow(spec)
+
+	// Initialize secret manager
+	logger := logrus.StandardLogger()
+	secretManager := secrets.NewSecretManager(logger)
+	
+	// Load secrets if file provided
+	if secretsFile != "" {
+		if err := secretManager.LoadSecretsFromFile(secretsFile); err != nil {
+			return fmt.Errorf("failed to load secrets: %w", err)
+		}
+		
+		// Validate required secrets
+		if err := secretManager.ValidateRequiredSecrets(wf.Secrets); err != nil {
+			return fmt.Errorf("secret validation failed: %w", err)
+		}
+	} else if len(wf.Secrets) > 0 {
+		return fmt.Errorf("workflow requires secrets but no secrets file provided. Use --secrets-file flag")
+	}
 
 	engine := workflow.NewEngine()
 	if err := engine.ValidateWorkflow(wf); err != nil {
@@ -77,6 +98,9 @@ func runWorkflow(filename string) error {
 		executor.PrintCacheStats()
 		executor.Close()
 	}()
+
+	// Set secret manager in executor
+	executor.SetSecretManager(secretManager)
 
 	ctx := context.Background()
 	return engine.ExecuteWorkflow(ctx, wf, executor)

@@ -150,7 +150,14 @@ func (e *ContainerExecutor) executeContainer(ctx context.Context, job *workflow.
 	if output != "" {
 		e.logger.Infof("Container output for %s:", containerSpec.Name)
 		fmt.Printf("--- Container Output [%s] ---\n", containerSpec.Name)
-		fmt.Print(output)
+		
+		// Mask secrets in output
+		maskedOutput := output
+		if e.secretManager != nil {
+			maskedOutput = e.secretManager.MaskSecretsInString(output)
+		}
+		
+		fmt.Print(maskedOutput)
 		fmt.Printf("--- End Output [%s] ---\n", containerSpec.Name)
 	}
 
@@ -255,7 +262,14 @@ func (e *ContainerExecutor) executeCommand(ctx context.Context, job *workflow.Jo
 	if output != "" {
 		e.logger.Infof("Container output for job %s:", job.Name)
 		fmt.Println("--- Container Output ---")
-		fmt.Print(output)
+		
+		// Mask secrets in output
+		maskedOutput := output
+		if e.secretManager != nil {
+			maskedOutput = e.secretManager.MaskSecretsInString(output)
+		}
+		
+		fmt.Print(maskedOutput)
 		fmt.Println("--- End Output ---")
 	}
 
