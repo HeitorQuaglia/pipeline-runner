@@ -65,7 +65,7 @@ func runWorkflow(filename, secretsFile string) error {
 		return fmt.Errorf("failed to parse workflow: %w", err)
 	}
 
-	wf := workflow.ConvertToWorkflow(spec)
+	wf := workflow.ConvertToWorkflow(spec, filename)
 
 	// Initialize secret manager
 	logger := logrus.StandardLogger()
