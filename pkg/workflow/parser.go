@@ -76,6 +76,16 @@ func ParseSimpleWorkflow(filename string) (*SimpleWorkflowSpec, error) {
 		return nil, fmt.Errorf("failed to read file %s: %w", filename, err)
 	}
 
+	return ParseSimpleWorkflowFromBytes(data)
+}
+
+// ParseSimpleWorkflowFromString parses workflow from YAML string
+func ParseSimpleWorkflowFromString(yamlContent string) (*SimpleWorkflowSpec, error) {
+	return ParseSimpleWorkflowFromBytes([]byte(yamlContent))
+}
+
+// ParseSimpleWorkflowFromBytes parses workflow from YAML bytes
+func ParseSimpleWorkflowFromBytes(data []byte) (*SimpleWorkflowSpec, error) {
 	var spec SimpleWorkflowSpec
 	if err := yaml.Unmarshal(data, &spec); err != nil {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)

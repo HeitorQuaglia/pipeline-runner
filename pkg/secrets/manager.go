@@ -83,6 +83,16 @@ func (sm *SecretManager) LoadSecretsFromFile(filename string) error {
 	return nil
 }
 
+// SetSecret sets a secret value
+func (sm *SecretManager) SetSecret(key, value string) {
+	sm.mutex.Lock()
+	defer sm.mutex.Unlock()
+	
+	sm.secrets[key] = value
+	sm.secretValues = append(sm.secretValues, value)
+	sm.logger.Debugf("Secret set: %s", key)
+}
+
 // GetSecret returns a secret value
 func (sm *SecretManager) GetSecret(key string) (string, bool) {
 	sm.mutex.RLock()
